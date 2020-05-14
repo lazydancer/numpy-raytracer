@@ -98,21 +98,20 @@ def main():
         Sphere(np.array((0.7,0.,-1.)), 0.3)
     ]
 
-    objects, intersections, normals, colors = trace_rays(scene, origins, directions)
+    depths = np.zeros(directions.shape[0], dtype=np.int)
 
-    print(objects, intersections, normals, colors)
+    objects, intersections, normals, colors = trace_rays(scene, origins, directions)
 
     hits = np.any(normals != np.inf, axis=1)
 
-    new_directions = np.full(directions.shape, np.inf)
     new_directions[hits] = scatters(directions[hits], normals[hits])
 
-    new_directions = np.abs(new_directions)
-    new_directions[new_directions == np.inf] = 0
-
+    depths[hits] += 1
 
     img = colors.reshape(w, h, 3)
 
+
+    breakpoint()
 
     plt.imsave('out.png', np.transpose(img, (1, 0, 2)))
 
