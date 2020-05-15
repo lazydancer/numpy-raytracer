@@ -7,7 +7,7 @@ def normalize(xs):
 
 class Sphere:
     def __init__(self, center, radius):
-        self.center = center
+        self.center = np.array(center, dtype=np.float)
         self.radius = radius
 
     def hit(self, origins, directions):
@@ -35,10 +35,13 @@ class Sphere:
         roots = np.vstack([t0, t1]).T
         roots.sort(axis=1)
 
+        # Remove if both roots negative 
+        possible_hits = possible_hits[0][roots[:,0] >= 0]
 
         # This only returns the closest for now.
-        # Need to account for if behind camera or inside sphere
-        t[possible_hits] = roots.T[0] 
+        # Need to account for if camera inside sphere
+
+        t[possible_hits] = roots[roots[:,0] >= 0][:,0]
 
         return t
 
@@ -46,9 +49,9 @@ class Sphere:
         return normalize(intersections - self.center)
 
 def scatters(directions, normals):
-    diffusion = 0.0
+    diffusion = 0.2
 
-    reflect = normalize(directions - (2 * np.sum(directions * normals, axis=1) * normals.T).T)
+    reflect = normalize(directions - 2 * np.sum(directions * normals, axis=1)[:,None] * normals)
 
     gauss = np.random.normal(size=directions.shape)
     gauss = normalize(gauss * np.sum(gauss * normals))
@@ -78,7 +81,7 @@ def trace_rays(scene, origins, directions):
     for obj in scene:
         normals[hits & (objects == obj)] = obj.normal(intersections[objects == obj])
 
-    colors[hits] = 0
+    colors[hits] = 0.1
     colors[~hits] = 0.7
 
     return objects, intersections, normals, colors 
@@ -94,26 +97,40 @@ def main():
     origins = np.zeros(directions.shape)
 
     scene = [
-        Sphere(np.array((0.,0.,-1.)), 0.3),
-        Sphere(np.array((0.7,0.,-1.)), 0.3)
+        Sphere([0, 0.2 , -1], 0.3),
+        Sphere([0.7, 0, -1], 0.3),
+        Sphere([0, -100.3, -1], 100)
     ]
 
-    depths = np.zeros(directions.shape[0], dtype=np.int)
+    mask = np.ones(origins.shape[0], dtype=np.bool)
 
-    objects, intersections, normals, colors = trace_rays(scene, origins, directions)
+    objects = np.empty(directions.shape[0], dtype=object)
+    intersections = np.full(origins.shape, np.inf)
+    normals = np.full(origins.shape, np.inf)
+    colors = np.full(origins.shape, 0.5)
+    new_colors = np.zeros(origins.shape)
 
-    hits = np.any(normals != np.inf, axis=1)
+    depth = 1
+    max_depth = 10
+    while depth < max_depth:
+        
+        objects[mask], intersections[mask], normals[mask], new_colors[mask] = trace_rays(scene, origins[mask], directions[mask])
+        colors[mask] = new_colors[mask] / depth
 
-    new_directions[hits] = scatters(directions[hits], normals[hits])
+        mask = mask & np.any(intersections != np.inf, axis=1)
 
-    depths[hits] += 1
+        origins[mask] = intersections[mask] + normals[mask]  * 0.001
+        directions[mask] = scatters(directions[mask], normals[mask])
 
+        depth += 1
+
+    colors[mask] = 0
+
+    colors = np.clip(colors, 0, 1)
     img = colors.reshape(w, h, 3)
+    img = np.transpose(img, (1, 0, 2))
 
-
-    breakpoint()
-
-    plt.imsave('out.png', np.transpose(img, (1, 0, 2)))
+    plt.imsave('out.png', img, origin='lower')
 
 
 
