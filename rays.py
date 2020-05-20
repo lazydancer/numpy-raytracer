@@ -2,32 +2,56 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def normalize(xs):
-    xs = (xs.T / np.linalg.norm(xs, axis=1)).T
-    return xs
+    return xs / np.linalg.norm(xs, axis=1)[:,np.newaxis]
 
 class Metal:
-    def __init__(self, diffusion):
+    def __init__(self, color, diffusion):
+        self.color = np.array(color, dtype=np.float32)
         self.diffusion = diffusion
 
-    def scatters(self, directions, normals):
+    def _reflect(self, directions, normals):
         reflect = normalize(directions - 2 * np.einsum('ij, ij->i', directions, normals)[:,None] * normals)
         gauss = np.random.normal(size=directions.shape)
         gauss = normalize(gauss * np.sum(gauss * normals))
 
-        return reflect + self.diffusion * gauss
+        new_directions = reflect + self.diffusion * gauss
+
+        return new_directions
+
+    def scatters(self, directions, normals, intersections):
+        origins = intersections + normals * 0.001
+        new_directions = self._reflect(directions, normals)
+
+        return origins, new_directions
+
 
 class Dielectric:
     def __init__(self, refraction_index):
         self.ri = refraction_index
+        self.color = np.array([1, 1, 1], dtype=np.float32)
 
-    def scatters(self, directions, normals):
-        pass
+    def _refract(self, directions, normals):
+        '''
+        https://en.wikipedia.org/wiki/Snell's_law
+        '''
+        r = 1/1.5
+        normals[np.where(np.einsum('ij, ij->i', directions, -normals) < 0)] *= -1
+        c = np.einsum('ij, ij->i', directions, -normals)
+
+        return r * directions + (r * c - np.sqrt(1 - r**2 * ( 1 - c**2 )))[:,np.newaxis] * normals
+
+
+    def scatters(self, directions, normals, intersections):
+        origins = intersections - normals * 0.001
+        new_directions = self._refract(normalize(directions), normals)
+
+        return origins, new_directions
+
 
 class Sphere:
-    def __init__(self, center, radius, color, material):
+    def __init__(self, center, radius, material):
         self.center = np.array(center, dtype=np.float32)
         self.radius = radius
-        self.color = np.array(color, dtype=np.float32)
         self.material = material
 
     def hit(self, origins, directions):
@@ -40,39 +64,31 @@ class Sphere:
         possible_hits = np.where(discriminant >= 0.0)
 
         discriminant = discriminant[possible_hits]
-        b = b[possible_hits]
-        a = a[possible_hits]
-        c = c[possible_hits]
 
         distSqrt = np.sqrt(discriminant)
-        distSqrt[np.where(b<0)] = -distSqrt[np.where(b<0)]
+        distSqrt[np.where( b[possible_hits] < 0 )] *= -1
 
-        q = (-b + distSqrt) / 2.0
+        q = (-b[possible_hits] + distSqrt) / 2.0
 
-        t0 = q / a 
-        t1 = c / q
+        t0 = q / a[possible_hits] 
+        t1 = c[possible_hits] / q
 
         roots = np.vstack([t0, t1]).T
+        roots[np.where(roots < 0)] = np.inf
         roots.sort(axis=1)
-
-        # Remove if both roots negative 
-        possible_hits = possible_hits[0][roots[:,1] >= 0]
-        roots = roots[roots[:, 1] >= 0]
-
-        # Find smallest > 0
-
-        #breakpoint()
-        t[possible_hits] = roots[np.arange(len(roots)), np.argmin(roots > 0, axis=1)]
+        
+        t[possible_hits] = roots[:,0]
 
         return t
 
     def scatters(self, directions, intersections):
         normals = normalize(intersections - self.center)
-        origins = intersections + normals  * 0.001
+        normals[np.where(np.einsum('ij, ij->i', directions, normals) > 0)] *= -1
 
-        new_directions = self.material.scatters(directions, normals)
+        origins, new_directions = self.material.scatters(directions, normals, intersections)
 
         return origins, new_directions
+
 
 def trace_rays(scene, origins, directions):
     '''
@@ -90,7 +106,6 @@ def trace_rays(scene, origins, directions):
     # Filter no hits 
     hits = np.where(ts != np.inf)[0]
 
-
     intersections = np.full(origins.shape, np.inf).astype(np.float32)
     normals = np.full(origins.shape, np.inf).astype(np.float32)
     colors = np.zeros(origins.shape).astype(np.float32)
@@ -101,7 +116,7 @@ def trace_rays(scene, origins, directions):
     intersections[hits] = origins[hits] + directions[hits] * np.array([ts[hits], ts[hits], ts[hits]]).T
 
     for obj in scene:
-        colors[objects == obj] = obj.color
+        colors[objects == obj] = obj.material.color
         new_origins[objects == obj], new_directions[objects == obj] = obj.scatters(directions[objects == obj], intersections[objects == obj])
 
 
@@ -136,11 +151,23 @@ def sample(scene, origins, directions):
 
     return colors
 
+class Camera:
+    def __init__(self, w, h, look_from, look_at):
+        self.w = w
+        self.h = h
+        self.look_from = look_from
+        self.look_at = look_at
+
+    def rays(self):
+        pass
+
+    def take_picture(scene):
+        pass
 
 def main():
     w, h = (600, 300)
 
-    sub_pixels_across = 3
+    sub_pixels_across = 5
 
     x = np.linspace(-2, 2, w*sub_pixels_across)
     y = np.linspace(-1, 1, h*sub_pixels_across)
@@ -149,14 +176,15 @@ def main():
     origins = np.zeros(directions.shape).astype(np.float32)
 
     scene = [
-        Sphere([0, 0.2 , -1], 0.3, [0.2, 0.2, 0.2], Metal(0.01)),
-        Sphere([0.7, 0, -1], 0.3, [0.7, 0.3, 0.2], Metal(0.5)),
-        Sphere([0, -1000.3, -1], 1000, [0.2, 0.7, 0.2], Metal(0.8))
+        Sphere([-0.2, 0 , -1], 0.3, Metal([0.2, 0.2, 0.2], 0.01)),
+        Sphere([0.7, 0, -1], 0.3, Metal([0.7, 0.3, 0.2], 0.5)),
+        Sphere([-1, 0, -1], 0.3, Dielectric(1.5)),
+        Sphere([0, -1000.3, -1], 1000, Metal([0.2, 0.7, 0.2], 0.8))
     ]
 
     colors = np.full(origins.shape, 0).astype(np.float32)
 
-    rays_per_pixel = 10
+    rays_per_pixel = 1
     for i in range(rays_per_pixel):
         colors += sample(scene, origins, directions) / rays_per_pixel
     
@@ -168,8 +196,6 @@ def main():
     img = np.transpose(img, (1, 0, 2))
 
     plt.imsave('out.png', img, origin='lower')
-
-
 
 
 import time
