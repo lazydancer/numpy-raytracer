@@ -34,7 +34,7 @@ class Dielectric:
         '''
         https://en.wikipedia.org/wiki/Snell's_law
         '''
-        r = 1/1.5
+        r = 1/1.0
         normals[np.where(np.einsum('ij, ij->i', directions, -normals) < 0)] *= -1
         c = np.einsum('ij, ij->i', directions, -normals)
 
