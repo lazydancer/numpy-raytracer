@@ -2,7 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def normalize(xs):
-    return xs / np.linalg.norm(xs, axis=1)[:,np.newaxis]
+    if len(xs.shape) == 1:
+        return xs / np.linalg.norm(xs)
+    else:
+        return xs / np.linalg.norm(xs, axis=1)[:,np.newaxis]
 
 class Metal:
     def __init__(self, color, diffusion):
@@ -34,7 +37,7 @@ class Dielectric:
         '''
         https://en.wikipedia.org/wiki/Snell's_law
         '''
-        r = 1/1.0
+        r = 1/1.4
         normals[np.where(np.einsum('ij, ij->i', directions, -normals) < 0)] *= -1
         c = np.einsum('ij, ij->i', directions, -normals)
 
@@ -134,7 +137,7 @@ def sample(scene, origins, directions):
     colors = np.full(origins.shape, [1, 1, 1]).astype(np.float32)
 
     depth = 1
-    max_depth = 15
+    max_depth = 10
     while depth < max_depth:        
         hits, ori, drt, col = trace_rays(scene, origins[mask], directions[mask])
 
@@ -143,60 +146,90 @@ def sample(scene, origins, directions):
         origins[mask] = ori
         directions[mask] = drt
 
-        print(len(mask))
         depth += 1
 
-    # Did not stop
     colors[mask] = 0
 
     return colors
 
+
+
 class Camera:
-    def __init__(self, w, h, look_from, look_at):
-        self.w = w
-        self.h = h
-        self.look_from = look_from
-        self.look_at = look_at
+    def __init__(self, config, look_from, look_at):
+        self.origin = np.array(look_from)
+        self.look_at = np.array(look_at)
+        
+        self.width = config['image_width']
+        self.height = int(config['image_width'] / config['aspect_ratio'])
+        self.samples_per_pixel = config['samples_per_pixel']
+        self.max_depth = config['max_depth']
+        #self.lens_radius = config['aperture']
 
-    def rays(self):
-        pass
+        w = normalize(self.origin - self.look_at)
+        self.u = normalize(np.cross(config['vup'], w))
+        self.v = np.cross(w, self.u)
 
-    def take_picture(scene):
-        pass
+        half_height = np.tan(config['vfov']/2)
+        half_width = config['aspect_ratio'] * half_height
+
+        focus_dist = np.linalg.norm(self.origin - self.look_at)
+        self.lower_left = self.origin - \
+            half_width * focus_dist * self.u - \
+            half_height * focus_dist * self.v - \
+            focus_dist * w
+
+        self.horizontal = 2*half_width * focus_dist * self.u
+        self.vertical = 2*half_height * focus_dist * self.v
+
+        self.sub_pixels_across = config['sub_pixels_across']
+
+    def take_picture(self, scene):
+        i = np.linspace(0, 1, self.width * self.sub_pixels_across)
+        j = np.linspace(0, 1, self.height * self.sub_pixels_across)
+
+        xx, yy = np.meshgrid(i, j)
+        xx = xx.T.reshape(-1, 1)
+        yy = yy.T.reshape(-1, 1)
+
+        directions = self.lower_left + xx * self.horizontal + yy * self.vertical - self.origin
+        
+        origins = np.full(directions.shape, self.origin).astype(np.float32)
+        colors = np.zeros(origins.shape).astype(np.float32)
+
+        for i in range(self.samples_per_pixel):
+            colors += sample(scene, origins, directions) / self.samples_per_pixel
+        
+        colors = np.sqrt(colors) # gamma adjustment
+        colors = colors.reshape((self.width, self.sub_pixels_across, self.height, self.sub_pixels_across, 3)).mean(3).mean(1)
+
+        colors = np.clip(colors, 0, 1)
+        img = colors.reshape(self.width, self.height, 3)
+        img = np.transpose(img, (1, 0, 2))
+
+        plt.imsave('out.png', img, origin='lower')
 
 def main():
-    w, h = (600, 300)
 
-    sub_pixels_across = 5
+    config = {
+        'vup': np.array((0,1,0)),
+        'vfov': np.pi/2, # In radians, give the virtical field of view
+        'aspect_ratio': 16 / 9, 
+        #'aperture': 0.5, # The radius of the apetrue
+        'image_width': 800,
+        'sub_pixels_across': 5,
+        'samples_per_pixel': 1,
+        'max_depth':  15,
+    }
 
-    x = np.linspace(-2, 2, w*sub_pixels_across)
-    y = np.linspace(-1, 1, h*sub_pixels_across)
-
-    directions = np.array(np.meshgrid(x, y, -1)).T.reshape(-1, 3).astype(np.float32)
-    origins = np.zeros(directions.shape).astype(np.float32)
+    camera = Camera(config, [0,2,2], [0,0,-1])
 
     scene = [
         Sphere([-0.2, 0 , -1], 0.3, Metal([0.2, 0.2, 0.2], 0.01)),
         Sphere([0.7, 0, -1], 0.3, Metal([0.7, 0.3, 0.2], 0.5)),
-        Sphere([-1, 0, -1], 0.3, Dielectric(1.5)),
         Sphere([0, -1000.3, -1], 1000, Metal([0.2, 0.7, 0.2], 0.8))
     ]
 
-    colors = np.full(origins.shape, 0).astype(np.float32)
-
-    rays_per_pixel = 1
-    for i in range(rays_per_pixel):
-        colors += sample(scene, origins, directions) / rays_per_pixel
-    
-    colors = np.sqrt(colors) # gamma adjustment
-    colors = colors.reshape((w, sub_pixels_across, h, sub_pixels_across, 3)).mean(3).mean(1)
-
-    colors = np.clip(colors, 0, 1)
-    img = colors.reshape(w, h, 3)
-    img = np.transpose(img, (1, 0, 2))
-
-    plt.imsave('out.png', img, origin='lower')
-
+    camera.take_picture(scene)
 
 import time
 start=time.time()
