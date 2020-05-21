@@ -8,9 +8,10 @@ def normalize(xs):
         return xs / np.linalg.norm(xs, axis=1)[:,np.newaxis]
 
 class Metal:
-    def __init__(self, color, diffusion):
+    def __init__(self, color, diffusion, emit=[0,0,0]):
         self.color = np.array(color, dtype=np.float32)
         self.diffusion = diffusion
+        self.emit = np.array(emit, dtype=np.float32)
 
     def _reflect(self, directions, normals):
         reflect = normalize(directions - 2 * np.einsum('ij, ij->i', directions, normals)[:,None] * normals)
@@ -110,10 +111,10 @@ def trace_rays(scene, origins, directions):
     hits = np.where(ts != np.inf)[0]
 
     intersections = np.full(origins.shape, np.inf).astype(np.float32)
-    normals = np.full(origins.shape, np.inf).astype(np.float32)
     colors = np.zeros(origins.shape).astype(np.float32)
     new_directions = np.empty(origins.shape)
     new_origins = np.empty(origins.shape)
+    emit = np.zeros(origins.shape).astype(np.float32)
 
     # Point of intersection
     intersections[hits] = origins[hits] + directions[hits] * np.array([ts[hits], ts[hits], ts[hits]]).T
@@ -121,12 +122,13 @@ def trace_rays(scene, origins, directions):
     for obj in scene:
         colors[objects == obj] = obj.material.color
         new_origins[objects == obj], new_directions[objects == obj] = obj.scatters(directions[objects == obj], intersections[objects == obj])
+        emit[objects == obj] = obj.material.emit
 
 
-    return hits, new_origins[hits], new_directions[hits], colors[hits]
+    return hits, new_origins[hits], new_directions[hits], colors[hits], emit[hits]
 
 
-def sample(scene, origins, directions):
+def sample(scene, origins, directions, max_depth):
     '''
     Inputs the scene and the rays, manages the colors for each depth
     '''
@@ -136,15 +138,18 @@ def sample(scene, origins, directions):
 
     colors = np.full(origins.shape, [1, 1, 1]).astype(np.float32)
 
-    depth = 1
-    max_depth = 10
-    while depth < max_depth:        
-        hits, ori, drt, col = trace_rays(scene, origins[mask], directions[mask])
+    depth = 0
+    while depth <= max_depth:        
+        hits, ori, drt, col, emit = trace_rays(scene, origins[mask], directions[mask])
 
         mask = mask[hits]
-        colors[mask] = colors[mask] * col
+        colors[mask] = colors[mask] * col 
         origins[mask] = ori
         directions[mask] = drt
+
+        mask = np.delete(mask, np.where(emit > 0)[0])
+
+        print(len(mask))
 
         depth += 1
 
@@ -197,7 +202,7 @@ class Camera:
         colors = np.zeros(origins.shape).astype(np.float32)
 
         for i in range(self.samples_per_pixel):
-            colors += sample(scene, origins, directions) / self.samples_per_pixel
+            colors += sample(scene, origins, directions, self.max_depth) / self.samples_per_pixel
         
         colors = np.sqrt(colors) # gamma adjustment
         colors = colors.reshape((self.width, self.sub_pixels_across, self.height, self.sub_pixels_across, 3)).mean(3).mean(1)
@@ -212,21 +217,27 @@ def main():
 
     config = {
         'vup': np.array((0,1,0)),
-        'vfov': np.pi/2, # In radians, give the virtical field of view
+        'vfov': np.pi/3, # In radians, give the virtical field of view
         'aspect_ratio': 16 / 9, 
         #'aperture': 0.5, # The radius of the apetrue
-        'image_width': 800,
-        'sub_pixels_across': 5,
+        'image_width': 700,
+        'sub_pixels_across': 2,
         'samples_per_pixel': 1,
-        'max_depth':  15,
+        'max_depth': 300,
     }
 
-    camera = Camera(config, [0,2,2], [0,0,-1])
+    camera = Camera(config, [0,1,1], [0,0,-1])
 
     scene = [
-        Sphere([-0.2, 0 , -1], 0.3, Metal([0.2, 0.2, 0.2], 0.01)),
-        Sphere([0.7, 0, -1], 0.3, Metal([0.7, 0.3, 0.2], 0.5)),
-        Sphere([0, -1000.3, -1], 1000, Metal([0.2, 0.7, 0.2], 0.8))
+        Sphere([0, 0 , -1], 0.3, Metal([0.2, 0.2, 0.2], 0.01)),
+        Sphere([-1, 0 , -1], 0.3, Metal([1, 1, 1], 0.5, [1,1,1])),
+        Sphere([1, 0, -1], 0.3, Metal([1, 0.5, 0.4], 0.5)),
+        Sphere([0, -1000.3, -1], 1000, Metal([1, 1, 1], 0.8)), # Ground
+        Sphere([0, 1002, -1], 1000, Metal([1, 1, 1], 1)), # Ceiling 
+        Sphere([1002, 0, -1], 1000, Metal([0.1, 0.1, 1], 0.8)), # Right
+        Sphere([-1002, 0, -1], 1000, Metal([1, 0.1, 0.1], 0.8)), # Left
+        Sphere([0, 0, -1002], 1000, Metal([1, 0.8, 1], 0.8)), # Back
+        Sphere([0, 0, 1002], 1000, Metal([1, 1, 1], 0.8)), # Back
     ]
 
     camera.take_picture(scene)
