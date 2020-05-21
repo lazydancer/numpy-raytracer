@@ -8,10 +8,10 @@ def normalize(xs):
         return xs / np.linalg.norm(xs, axis=1)[:,np.newaxis]
 
 class Metal:
-    def __init__(self, color, diffusion, emit=[0,0,0]):
+    def __init__(self, color, diffusion, emit=False):
         self.color = np.array(color, dtype=np.float32)
         self.diffusion = diffusion
-        self.emit = np.array(emit, dtype=np.float32)
+        self.emit = emit
 
     def _reflect(self, directions, normals):
         reflect = normalize(directions - 2 * np.einsum('ij, ij->i', directions, normals)[:,None] * normals)
@@ -94,64 +94,46 @@ class Sphere:
         return origins, new_directions
 
 
-def trace_rays(scene, origins, directions):
-    '''
-    Find closest object fro each ray abd determine its color
-    '''
-    objects = np.empty(directions.shape[0], dtype=object)
-    ts = np.full(directions.shape[0], np.inf).astype(np.float32)
-
-    for obj in scene:
-        obj_ts = obj.hit(origins, directions)
-
-        objects[obj_ts < ts] = obj
-        ts[obj_ts < ts] = obj_ts[obj_ts < ts]
-
-    # Filter no hits 
-    hits = np.where(ts != np.inf)[0]
-
-    intersections = np.full(origins.shape, np.inf).astype(np.float32)
-    colors = np.zeros(origins.shape).astype(np.float32)
-    new_directions = np.empty(origins.shape)
-    new_origins = np.empty(origins.shape)
-    emit = np.zeros(origins.shape).astype(np.float32)
-
-    # Point of intersection
-    intersections[hits] = origins[hits] + directions[hits] * np.array([ts[hits], ts[hits], ts[hits]]).T
-
-    for obj in scene:
-        colors[objects == obj] = obj.material.color
-        new_origins[objects == obj], new_directions[objects == obj] = obj.scatters(directions[objects == obj], intersections[objects == obj])
-        emit[objects == obj] = obj.material.emit
-
-
-    return hits, new_origins[hits], new_directions[hits], colors[hits], emit[hits]
-
-
-def sample(scene, origins, directions, max_depth):
+def ray_color(scene, origins, directions, max_depth):
     '''
     Inputs the scene and the rays, manages the colors for each depth
     '''
     origins = origins.copy()
     directions = directions.copy()
-    mask = np.arange(origins.shape[0])
 
-    colors = np.full(origins.shape, [1, 1, 1]).astype(np.float32)
+    mask = np.ones(origins.shape[0], dtype=np.bool)
+    colors = np.ones(origins.shape, dtype=np.float32)
+    emit = np.zeros(origins.shape[0], dtype=np.bool)
 
-    depth = 0
-    while depth <= max_depth:        
-        hits, ori, drt, col, emit = trace_rays(scene, origins[mask], directions[mask])
+    for i in range(max_depth):
+        sub_objects = np.empty(mask.sum(), dtype=object)
+        ts = np.full(mask.sum(), np.inf, dtype=np.float32)
 
-        mask = mask[hits]
-        colors[mask] = colors[mask] * col 
-        origins[mask] = ori
-        directions[mask] = drt
+        for obj in scene:
+            obj_ts = obj.hit(origins[mask,:], directions[mask,:])
 
-        mask = np.delete(mask, np.where(emit > 0)[0])
+            sub_objects[obj_ts < ts] = obj
+            ts[obj_ts < ts] = obj_ts[obj_ts < ts]
 
-        print(len(mask))
+        objects = np.empty(mask.shape, dtype=object)
+        objects[mask] = sub_objects
+        
+        # Filter no hits, there is no open sky in this situation so ts cannot equal np.inf 
+        # mask = ts != np.inf
 
-        depth += 1
+        intersections = np.full(origins.shape, np.inf, dtype=np.float32)
+        intersections[mask] = origins[mask] + directions[mask,:] * ts[:, np.newaxis]
+
+
+        for obj in scene:
+            colors[objects == obj] *= obj.material.color
+            origins[objects == obj], directions[objects == obj] = obj.scatters(directions[objects == obj], intersections[objects == obj])
+            emit[objects == obj] = obj.material.emit
+
+        mask[emit] = False
+
+        print(mask.sum())
+
 
     colors[mask] = 0
 
@@ -197,12 +179,12 @@ class Camera:
         yy = yy.T.reshape(-1, 1)
 
         directions = self.lower_left + xx * self.horizontal + yy * self.vertical - self.origin
-        
+        directions = directions.astype(np.float32)
         origins = np.full(directions.shape, self.origin).astype(np.float32)
         colors = np.zeros(origins.shape).astype(np.float32)
 
         for i in range(self.samples_per_pixel):
-            colors += sample(scene, origins, directions, self.max_depth) / self.samples_per_pixel
+            colors += ray_color(scene, origins, directions, self.max_depth) / self.samples_per_pixel
         
         colors = np.sqrt(colors) # gamma adjustment
         colors = colors.reshape((self.width, self.sub_pixels_across, self.height, self.sub_pixels_across, 3)).mean(3).mean(1)
@@ -230,7 +212,7 @@ def main():
 
     scene = [
         Sphere([0, 0 , -1], 0.3, Metal([0.2, 0.2, 0.2], 0.01)),
-        Sphere([-1, 0 , -1], 0.3, Metal([1, 1, 1], 0.5, [1,1,1])),
+        Sphere([-1, 0 , -1], 0.3, Metal([1, 1, 1], 0.5, True)),
         Sphere([1, 0, -1], 0.3, Metal([1, 0.5, 0.4], 0.5)),
         Sphere([0, -1000.3, -1], 1000, Metal([1, 1, 1], 0.8)), # Ground
         Sphere([0, 1002, -1], 1000, Metal([1, 1, 1], 1)), # Ceiling 
