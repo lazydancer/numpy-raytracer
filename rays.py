@@ -25,12 +25,8 @@ class Metal:
 
         return unit_random + normals
 
-
-
     def _reflect(self, directions, normals):
         reflect = normalize(directions - 2 * np.einsum('ij, ij->i', directions, normals)[:,None] * normals)
-        #gauss = np.random.normal(size=directions.shape)
-        #gauss = normalize(gauss * np.sum(gauss * normals))
         gauss = self._random_in_unit_sphere(normals)
         new_directions = reflect + self.diffusion * gauss
 
@@ -197,55 +193,8 @@ def main():
     camera.take_picture(scene, f'out.png')        
 
 
-def rotate():
-
-    config = {
-        'vup': np.array((0,1,0)),
-        'vfov': np.pi/3, # In radians, give the virtical field of view
-        'aspect_ratio': 16 / 9, 
-        'image_width': 700, 
-        'sub_pixels_across': 7, # 7
-        'samples_per_pixel': 1,
-        'max_depth': 5, 
-    }
-
-
-    i = 346
-    for coord in rotate_camera_around_point()[346:453]:
-        print(coord)
-
-        camera = Camera(config, coord, [0,0,-1])
-
-        scene = [
-            Sphere([0, 0 , -1], 0.3, Metal([0.2, 0.2, 0.2], 0.01)),
-            Sphere([-1, 0 , -1], 0.3, Metal([1, 1, 1], 0.5, True)),
-            Sphere([1, 0, -1], 0.3, Metal([1, 0.5, 0.4], 0.5)),
-            Sphere([0, -1000.3, -1], 1000, Metal([1, 1, 1], 0.9)), # Ground
-            Sphere([0, 1002, -1], 1000, Metal([1, 1, 1], 0.9)), # Ceiling 
-            Sphere([1002, 0, -1], 1000, Metal([0.1, 0.1, 1], 0.9)), # Right
-            Sphere([-1002, 0, -1], 1000, Metal([1, 0.1, 0.1], 0.9)), # Left
-            Sphere([0, 0, -1003], 1000, Metal([1, 0.8, 1], 0.9)), # Back
-            Sphere([0, 0, 1002], 1000, Metal([1, 1, 1], 0.9)), # Back
-        ]
-
-        camera.take_picture(scene, f'gif/{i:03d}.png')
-        i += 1
-
-# def rotate_camera_around_point():
-#     frames = 500
-#     step = 2*np.pi / frames  
-
-#     rads = np.linspace(0, 2*np.pi, frames)
-
-#     result = np.array([2*np.sin(-rads), np.ones(rads.shape), 2*np.cos(-rads)-1])
-
-#     return result.T
-
-
-#rotate_camera_around_point()
 import time
 start=time.time()
 main()
 print("time: {0:.6f}".format(time.time()-start))
 
-#"C:\Users\jpucula\Portable Apps\ffmpeg-20200522-38490cb-win64-static\bin\ffmpeg.exe" -framerate 30 -i  C:\Users\jpucula\Documents\ray_tracer_v2\gif\%03d.png C:\Users\jpucula\Documents\ray_tracer_v2\gif\output.mp4
